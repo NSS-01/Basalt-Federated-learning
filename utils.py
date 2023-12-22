@@ -17,11 +17,7 @@ from datasets import CIFAR10_truncated, CIFAR100_truncated,MNIST_truncated,Image
 import pandas as pd  # for data manipulation
 import numpy as np  # for data manipulation
 import torch
-# Visualization
-import plotly.express as px  # for data visualization
-import matplotlib.pyplot as plt  # for showing handwritten digits
 
-# UMAP dimensionality reduction
 from umap import UMAP
 from sklearn.cluster import KMeans, SpectralClustering, DBSCAN
 
@@ -492,8 +488,6 @@ def umap_kmeans(matrix, sampled_client_indices):
         benign_result = v1
     elif len(v0) > len(v1):
         benign_result = v0
-    else:
-        benign_result =[0,1,2,3,4,5,6]
     print(benign_result)
 
 

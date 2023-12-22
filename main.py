@@ -1,5 +1,6 @@
 import numpy as np
 import json
+
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -26,8 +27,8 @@ def get_args():
     parser.add_argument('--lr', type=float, default=0.01, help='learning rate (default: 0.1)')
     parser.add_argument('--epochs', type=int, default=5, help='number of local epochs')
     parser.add_argument('--n_parties', type=int, default=20, help='number of workers in a distributed cluster')
-    parser.add_argument('--alg', type=str, default='Median',
-                        help='communication strategy: fedavg/fedprox/moon/Median/trimmed_mean/krum')
+    parser.add_argument('--alg', type=str, default='basalt',
+                        help='communication strategy: fedavg/fedprox/basalt/Median/trimmed_mean/krum')
     parser.add_argument('--comm_round', type=int, default=50, help='number of maximum communication roun')
     parser.add_argument('--init_seed', type=int, default=0, help="Random seed")
     parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
@@ -40,7 +41,7 @@ def get_args():
     parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
     parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
     parser.add_argument('--optimizer', type=str, default='sgd', help='the optimizer')
-    parser.add_argument('--mu', type=float, default=1, help='the mu parameter for fedprox or moon')
+    parser.add_argument('--mu', type=float, default=1, help='the mu parameter for fedprox or basalt')
     parser.add_argument('--out_dim', type=int, default=256, help='the output dimension for the projection layer')
     parser.add_argument('--temperature', type=float, default=0.5, help='the temperature parameter for contrastive loss')
     parser.add_argument('--local_max_epoch', type=int, default=100, help='the number of epoch for local optimal training')
@@ -49,7 +50,7 @@ def get_args():
     parser.add_argument('--sample_fraction', type=float, default=1.0, help='how many clients are sampled in each round')
     parser.add_argument('--load_model_file', type=str, default=None, help='the model to load as global model')
     parser.add_argument('--load_pool_file', type=str, default=None, help='the old model pool path to load')
-    parser.add_argument('--load_model_round', type=int, default=None, help='how many rounds have executed for the loaded model')
+    parser.add_argument('--load_model_round', type=int, default=100, help='how many rounds have executed for the loaded model')
     parser.add_argument('--load_first_net', type=int, default=1, help='whether load the first net as old net or not')
     parser.add_argument('--normal_model', type=int, default=0, help='use normal model or aggregate model')
     parser.add_argument('--loss', type=str, default='contrastive')
@@ -319,8 +320,7 @@ def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader
     logger.info(' ** Training complete **')
     return train_acc, test_acc
 
-
-def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu, temperature, args,
+def train_net_fedcon(net_id, net, global_net, previous_nets, macilious_prev_model, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu, temperature, args,
                       round, device="cpu"):
     net = nn.DataParallel(net)
     net.cuda()
@@ -335,7 +335,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
     logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
     logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
 
-
+    triple_loss = torch.nn.TripletMarginLoss(margin=-0.05, p=2).cuda()
     if args_optimizer == 'adam':
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
     elif args_optimizer == 'amsgrad':
@@ -354,11 +354,8 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
     for macilious_previous_net in macilious_prev_model:
         macilious_previous_net.cuda()
 
-    global_w = global_net.state_dict()
-
     cnt = 0
-    cos=torch.nn.CosineSimilarity(dim=-1)
-    # mu = 0.001
+
     if net_id in [i for i in range(0,14)]:
         for epoch in range(epochs):
             epoch_loss_collector = []
@@ -374,31 +371,17 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
                 target = target.long()
 
                 _, pro1, out = net(x)
-                _, pro2, _ = global_net(x)
-
-                posi = cos(pro1, pro2)
-                logits = posi.reshape(-1, 1)
 
                 for previous_net in previous_nets:
                     previous_net.cuda()
-                    _, pro3, _ = previous_net(x)
-                    nega = cos(pro1, pro3)
-                    logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
-
-                    previous_net.to('cpu')
-                for macilious_previous_net in macilious_prev_model:
-                    macilious_previous_net.cuda()
-                    _, pro4, _ = macilious_previous_net(x)
-                    nega1 = cos(pro1, pro4)
-                    logits = torch.cat((logits, nega1.reshape(-1, 1)), dim=1)
-
-                logits /= temperature
-                labels = torch.zeros(x.size(0)).cuda().long()
-
-                loss2 = mu * criterion(logits, labels)
 
                 loss1 = criterion(out, target)
-                loss = loss1 + loss2
+
+                anchor = torch.nn.utils.parameters_to_vector(net.parameters()).cuda()
+                positive = torch.nn.utils.parameters_to_vector(previous_net.parameters()).cuda()
+                negative = torch.nn.utils.parameters_to_vector(macilious_previous_net.parameters()).cuda()
+                loss2 = triple_loss(anchor,positive,negative)
+                loss = loss1+loss2
 
                 loss.backward()
                 optimizer.step()
@@ -411,6 +394,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
             epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
             epoch_loss1 = sum(epoch_loss1_collector) / len(epoch_loss1_collector)
             epoch_loss2 = sum(epoch_loss2_collector) / len(epoch_loss2_collector)
+            print('Epoch: %d Loss: %f Loss1: %f Loss2: %f' % (epoch, epoch_loss, epoch_loss1, epoch_loss2))
             logger.info('Epoch: %d Loss: %f Loss1: %f Loss2: %f' % (epoch, epoch_loss, epoch_loss1, epoch_loss2))
 
         for previous_net in previous_nets:
@@ -443,39 +427,39 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
                 target = target.long()
 
                 _, pro1, out = net(x)
-                _, pro2, _ = global_net(x)
+                # _, pro2, _ = global_net(x)
 
-                posi = cos(pro1, pro2)
-                logits = posi.reshape(-1, 1)
+                # posi = cos(pro1, pro2)
+                # logits = posi.reshape(-1, 1)
 
                 for previous_net in previous_nets:
                     previous_net.cuda()
-                    _, pro3, _ = previous_net(x)
-                    nega = cos(pro1, pro3)
-                    logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
+                    # _, pro3, _ = previous_net(x)
+                    # nega = cos(pro1, pro3)
+                    # logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
+                    #
+                    # previous_net.to('cpu')
 
-                    previous_net.to('cpu')
-
-                logits /= temperature
-                labels = torch.zeros(x.size(0)).cuda().long()
-
-                loss2 = mu * criterion(logits, labels)
+                # logits /= temperature
+                # labels = torch.zeros(x.size(0)).cuda().long()
+                #
+                # loss2 = mu * criterion(logits, labels)
 
                 loss1 = criterion(out, target)
-                loss = loss1 + loss2
-
+                # loss = loss1 + loss2
+                loss=loss1
                 loss.backward()
                 optimizer.step()
 
                 cnt += 1
                 epoch_loss_collector.append(loss.item())
                 epoch_loss1_collector.append(loss1.item())
-                epoch_loss2_collector.append(loss2.item())
+                # epoch_loss2_collector.append(loss2.item())
 
             epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
             epoch_loss1 = sum(epoch_loss1_collector) / len(epoch_loss1_collector)
-            epoch_loss2 = sum(epoch_loss2_collector) / len(epoch_loss2_collector)
-            logger.info('Epoch: %d Loss: %f Loss1: %f Loss2: %f' % (epoch, epoch_loss, epoch_loss1, epoch_loss2))
+            # epoch_loss2 = sum(epoch_loss2_collector) / len(epoch_loss2_collector)
+            logger.info('Epoch: %d Loss: %f Loss1: %f' % (epoch, epoch_loss, epoch_loss1))
 
         for previous_net in previous_nets:
             previous_net.to('cpu')
@@ -502,26 +486,27 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
                 target = target.long()
 
                 _, pro1, out = net(x)
-                _, pro2, _ = global_net(x)
-
-                posi = cos(pro1, pro2)
-                logits = posi.reshape(-1, 1)
+                # _, pro2, _ = global_net(x)
+                #
+                # posi = cos(pro1, pro2)
+                # logits = posi.reshape(-1, 1)
 
                 for previous_net in previous_nets:
                     previous_net.cuda()
-                    _, pro3, _ = previous_net(x)
-                    nega = cos(pro1, pro3)
-                    logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
+                    # _, pro3, _ = previous_net(x)
+                    # nega = cos(pro1, pro3)
+                    # logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
+                    #
+                    # previous_net.to('cpu')
 
-                    previous_net.to('cpu')
-
-                logits /= temperature
-                labels = torch.zeros(x.size(0)).cuda().long()
-
-                loss2 = mu * criterion(logits, labels)
+                # logits /= temperature
+                # labels = torch.zeros(x.size(0)).cuda().long()
+                #
+                # loss2 = mu * criterion(logits, labels)
 
                 loss1 = criterion(out, target)
-                loss = loss1 + loss2
+                # loss = loss1 + loss2
+                loss = loss1
 
                 loss.backward()
                 optimizer.step()
@@ -530,7 +515,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets,macilious_prev_model
                 cnt += 1
                 epoch_loss_collector.append(loss.item())
                 epoch_loss1_collector.append(loss1.item())
-                epoch_loss2_collector.append(loss2.item())
+                # epoch_loss2_collector.append(loss2.item())
         temp_vector=torch.nn.utils.parameters_to_vector(net.parameters())*(-4)
         # temp_vector=temp_vector.tolist()
         torch.nn.utils.vector_to_parameters(temp_vector,net.parameters())
@@ -588,14 +573,15 @@ def local_train_net(nets, args, net_dataidx_map, train_dl=None, test_dl=None, gl
         elif args.alg == 'fedprox':
             trainacc, testacc = train_net_fedprox(net_id, net, global_model, train_dl_local, test_dl, n_epoch, args.lr,
                                                   args.optimizer, args.mu, args, device=device)
-        elif args.alg == 'moon':
+        elif args.alg == 'basalt':
             prev_models=[]
             for i in range(len(prev_model_pool)):
                 prev_models.append(prev_model_pool[i][net_id])
             macilious_prev_model=macilious_model_pool
             trainacc, testacc = train_net_fedcon(net_id, net, global_model, prev_models,macilious_prev_model, train_dl_local, test_dl, n_epoch, args.lr,
                                                   args.optimizer, args.mu, args.temperature, args, round, device=device)
-            print(net_id,trainacc,testacc)
+
+            print(f"net_id: {net_id},train accuracy: {trainacc*100}%  test accuracy: {testacc*100}%")
         elif args.alg == 'local_training':
             trainacc, testacc = train_net(net_id, net, train_dl_local, test_dl, n_epoch, args.lr, args.optimizer, args,
                                           device=device)
@@ -677,10 +663,6 @@ if __name__ == '__main__':
     else:#如果每一轮训练过程中选择全部用户的话
         for i in range(args.comm_round):
             party_list_rounds.append(party_list)
-    # party_list = [i for i in range(0,13)]
-    # party_list_rounds = []  # 记录每一轮参与训练的客户端的index
-    # for i in range(args.comm_round):
-    #     party_list_rounds.append(party_list)
 
 
 
@@ -715,7 +697,7 @@ if __name__ == '__main__':
         for key in moment_v:
             moment_v[key] = 0
 
-    if args.alg == 'moon':
+    if args.alg == 'basalt':
         old_nets_pool = []
         macilious_old_nets_pool = []
         if args.load_pool_file:
@@ -735,10 +717,6 @@ if __name__ == '__main__':
         #test
         old_nets_pool.append(old_nets)
         macilious_old_nets_pool.append(macilious_global_model)
-
-
-
-
 
         for round in range(n_comm_rounds):
             logger.info("######################in comm round:###############################" + str(round))
@@ -767,6 +745,7 @@ if __name__ == '__main__':
             local_train_net(nets_this_round, args, net_dataidx_map, train_dl=train_dl, test_dl=test_dl, global_model = global_model, prev_model_pool=old_nets_pool,macilious_model_pool=macilious_old_nets_pool,round=round, device=device)
 
 
+
             #计算聚合权重
             total_data_points = sum([len(net_dataidx_map[r]) for r in party_list_this_round])
             fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in party_list_this_round]
@@ -776,11 +755,6 @@ if __name__ == '__main__':
             for net_id, net in enumerate(nets_this_round.values()):
                 vec = torch.nn.utils.parameters_to_vector(net.parameters()).tolist()
                 matrix.append(vec)
-
-
-            # a1=mutual_info_score(matrix[0],matrix[1])
-            # a2 = mutual_info_score(matrix[0], matrix[2])
-            # a3 = mutual_info_score(matrix[0], matrix[8])
 
             matrix = np.array(matrix)
             benign_sample, y_pred = umap_kmeans(matrix, party_list_this_round)
@@ -804,9 +778,6 @@ if __name__ == '__main__':
                     macilious_avg_freqs.append(0)
             print(macilious_avg_freqs)
 
-
-
-
             #加权聚合(良性用户)
             for net_id, net in enumerate(nets_this_round.values()):
                 net_para = net.state_dict()
@@ -828,7 +799,6 @@ if __name__ == '__main__':
                     global_w[key] = old_w[key] - moment_v[key]
 
             global_model.load_state_dict(global_w)
-            #summary(global_model.to(device), (3, 32, 32))
 
             # 加权聚合(恶意用户)
             for net_id, net in enumerate(nets_this_round.values()):
@@ -844,29 +814,17 @@ if __name__ == '__main__':
             macilious_global_model.load_state_dict(macilious_global_w)
 
 
-
-
-
-
-
-
-
-
-
-
             logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
             global_model.cuda()
             train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device)
             test_acc, conf_matrix, _ = compute_accuracy(global_model, test_dl, get_confusion_matrix=True, device=device)
             global_model.to('cpu')
-            logger.info('>> moon Global Model Train accuracy: %f' % train_acc)
-            logger.info('>> moon Global Model Test accuracy: %f' % test_acc)
-            logger.info('>> moon Global Model Train loss: %f' % train_loss)
-            print(" moon Global Model Train accuracy" + str(train_acc))
-            print("moon Global Model Test accuracy" + str(test_acc))
-
-
+            logger.info('>> Basalt Global Model Train accuracy: %f' % train_acc)
+            logger.info('>> Basalt Global Model Test accuracy: %f' % test_acc)
+            logger.info('>> Basalt Global Model Train loss: %f' % train_loss)
+            print(" Basalt Global Model Train accuracy" + str(train_acc))
+            print("Basalt Global Model Test accuracy" + str(test_acc))
 
             macilious_old_nets_pool.append(macilious_global_model)
 
@@ -1049,27 +1007,6 @@ if __name__ == '__main__':
 
 
 
-            # 联邦平均加权聚合
-            # for net_id, net in enumerate(nets_this_round.values()):
-            #     net_para = net.state_dict()
-            #     if net_id == 0:
-            #         for key in net_para:
-            #             global_w[key] = net_para[key] * fed_avg_freqs[net_id]
-            #     else:
-            #         for key in net_para:
-            #             global_w[key] += net_para[key] * fed_avg_freqs[net_id]
-            #
-            # # 如果使用滑动平均
-            # if args.server_momentum:
-            #     delta_w = copy.deepcopy(global_w)
-            #     for key in delta_w:
-            #         delta_w[key] = old_w[key] - global_w[key]
-            #         moment_v[key] = args.server_momentum * moment_v[key] + (1 - args.server_momentum) * delta_w[key]
-            #         global_w[key] = old_w[key] - moment_v[key]
-
-            # global_model.load_state_dict(global_w)
-
-            # logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
             global_model.cuda()
             train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device)
@@ -1126,28 +1063,7 @@ if __name__ == '__main__':
             torch.nn.utils.vector_to_parameters(Trimmean, global_model.parameters())
 
 
-            # #联邦平均加权聚合
-            # for net_id, net in enumerate(nets_this_round.values()):
-            #     net_para = net.state_dict()
-            #     if net_id == 0:
-            #         for key in net_para:
-            #             global_w[key] = net_para[key] * fed_avg_freqs[net_id]
-            #     else:
-            #         for key in net_para:
-            #             global_w[key] += net_para[key] * fed_avg_freqs[net_id]
-            #
-            # # 如果使用滑动平均
-            # if args.server_momentum:
-            #     delta_w = copy.deepcopy(global_w)
-            #     for key in delta_w:
-            #         delta_w[key] = old_w[key] - global_w[key]
-            #         moment_v[key] = args.server_momentum * moment_v[key] + (1-args.server_momentum) * delta_w[key]
-            #         global_w[key] = old_w[key] - moment_v[key]
-            #
-            #
-            # global_model.load_state_dict(global_w)
 
-            #logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
             global_model.cuda()
             train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device)
