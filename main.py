@@ -36,7 +36,7 @@ def get_args():
     parser.add_argument('--reg', type=float, default=1e-5, help="L2 regularization strength")
     parser.add_argument('--logdir', type=str, required=False, default="./logs/", help='Log directory path')
     parser.add_argument('--modeldir', type=str, required=False, default="./models/", help='Model directory path')
-    parser.add_argument('--beta', type=float, default=0.5,
+    parser.add_argument('--alpha', type=float, default=0.1,
                         help='The parameter for the dirichlet distribution for data partitioning')
     parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
     parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
@@ -335,7 +335,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, macilious_prev_mode
     logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
     logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
 
-    triple_loss = torch.nn.TripletMarginLoss(margin=-0.05, p=2).cuda()
+    triple_loss = torch.nn.TripletMarginLoss(margin=10, p=2).cuda()
     if args_optimizer == 'adam':
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
     elif args_optimizer == 'amsgrad':
@@ -370,16 +370,16 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, macilious_prev_mode
                 target.requires_grad = False
                 target = target.long()
 
-                _, pro1, out = net(x)
+                _, _, out = net(x)
 
                 for previous_net in previous_nets:
                     previous_net.cuda()
 
                 loss1 = criterion(out, target)
 
-                anchor = torch.nn.utils.parameters_to_vector(net.parameters()).cuda()
+                anchor = torch.nn.utils.parameters_to_vector(net.parameters()).cuda().detach()
                 positive = torch.nn.utils.parameters_to_vector(previous_net.parameters()).cuda()
-                negative = torch.nn.utils.parameters_to_vector(macilious_previous_net.parameters()).cuda()
+                negative= torch.nn.utils.parameters_to_vector(macilious_previous_net.parameters()).cuda().detach()
                 loss2 = triple_loss(anchor,positive,negative)
                 loss = loss1+loss2
 
@@ -427,26 +427,14 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, macilious_prev_mode
                 target = target.long()
 
                 _, pro1, out = net(x)
-                # _, pro2, _ = global_net(x)
-
-                # posi = cos(pro1, pro2)
-                # logits = posi.reshape(-1, 1)
 
                 for previous_net in previous_nets:
                     previous_net.cuda()
-                    # _, pro3, _ = previous_net(x)
-                    # nega = cos(pro1, pro3)
-                    # logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
-                    #
-                    # previous_net.to('cpu')
 
-                # logits /= temperature
-                # labels = torch.zeros(x.size(0)).cuda().long()
-                #
-                # loss2 = mu * criterion(logits, labels)
+
+
 
                 loss1 = criterion(out, target)
-                # loss = loss1 + loss2
                 loss=loss1
                 loss.backward()
                 optimizer.step()
@@ -485,27 +473,13 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, macilious_prev_mode
                 target.requires_grad = False
                 target = target.long()
 
-                _, pro1, out = net(x)
-                # _, pro2, _ = global_net(x)
-                #
-                # posi = cos(pro1, pro2)
-                # logits = posi.reshape(-1, 1)
+                _, _, out = net(x)
 
                 for previous_net in previous_nets:
                     previous_net.cuda()
-                    # _, pro3, _ = previous_net(x)
-                    # nega = cos(pro1, pro3)
-                    # logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
-                    #
-                    # previous_net.to('cpu')
-
-                # logits /= temperature
-                # labels = torch.zeros(x.size(0)).cuda().long()
-                #
-                # loss2 = mu * criterion(logits, labels)
 
                 loss1 = criterion(out, target)
-                # loss = loss1 + loss2
+
                 loss = loss1
 
                 loss.backward()
@@ -515,9 +489,9 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, macilious_prev_mode
                 cnt += 1
                 epoch_loss_collector.append(loss.item())
                 epoch_loss1_collector.append(loss1.item())
-                # epoch_loss2_collector.append(loss2.item())
+
         temp_vector=torch.nn.utils.parameters_to_vector(net.parameters())*(-4)
-        # temp_vector=temp_vector.tolist()
+
         torch.nn.utils.vector_to_parameters(temp_vector,net.parameters())
 
 
@@ -649,7 +623,7 @@ if __name__ == '__main__':
     #划分数据
     logger.info("Partitioning data")
     X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(
-        args.dataset, args.datadir, args.logdir, args.partition, args.n_parties, beta=args.beta)
+        args.dataset, args.datadir, args.logdir, args.partition, args.n_parties, alpha=args.alpha)
 
 
 
