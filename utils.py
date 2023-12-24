@@ -1,48 +1,27 @@
 import os
-import logging
-import numpy as np
-import torch
+import sys
 import torchvision.transforms as transforms
 import torch.utils.data as data
 from torch.autograd import Variable
-import torch.nn.functional as F
-import torch.nn as nn
-import random
 from sklearn.metrics import confusion_matrix
-
 from model import *
 from datasets import CIFAR10_truncated, CIFAR100_truncated,MNIST_truncated,ImageFolder_custom
-
-# Data manipulation
-import pandas as pd  # for data manipulation
 import numpy as np  # for data manipulation
 import torch
-
 from umap import UMAP
 from sklearn.cluster import KMeans, SpectralClustering, DBSCAN
-
-
-
-
-
-
-
-
-
-
-
-logging.basicConfig()
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-
+from loguru import logger
+# 为不同的日志级别添加handler并设置颜色
+logger.add(sys.stderr, format="<green>{time}</green> | <level>{level: <8}</level> | <level>{message}</level>", level="DEBUG", colorize=True, filter=lambda record: record["level"].name == "DEBUG")
+logger.add(sys.stderr, format="<yellow>{time}</yellow> | <level>{level: <8}</level> | <level>{message}</level>", level="INFO", colorize=True, filter=lambda record: record["level"].name == "INFO")
+logger.add(sys.stderr, format="<blue>{time}</blue> | <level>{level: <8}</level> | <level>{message}</level>", level="WARNING", colorize=True, filter=lambda record: record["level"].name == "WARNING")
+logger.add(sys.stderr, format="<red>{time}</red> | <level>{level: <8}</level> | <level>{message}</level>", level="ERROR", colorize=True, filter=lambda record: record["level"].name == "ERROR")
+logger.add(sys.stderr, format="<magenta>{time}</magenta> | <level>{level: <8}</level> | <level>{message}</level>", level="CRITICAL", colorize=True, filter=lambda record: record["level"].name == "CRITICAL")
 def mkdirs(dirpath):
     try:
         os.makedirs(dirpath)
     except Exception as _:
         pass
-
-
 def load_mnist_data(datadir):
     transform = transforms.Compose([transforms.ToTensor()])
 
@@ -51,9 +30,6 @@ def load_mnist_data(datadir):
 
     X_train, y_train = cifar10_train_ds.data, cifar10_train_ds.target
     X_test, y_test = cifar10_test_ds.data, cifar10_test_ds.target
-
-    # y_train = y_train.numpy()
-    # y_test = y_test.numpy()
 
     return (X_train, y_train, X_test, y_test)
 
@@ -67,9 +43,6 @@ def load_cifar10_data(datadir):
     X_train, y_train = cifar10_train_ds.data, cifar10_train_ds.target
     X_test, y_test = cifar10_test_ds.data, cifar10_test_ds.target
 
-    # y_train = y_train.numpy()
-    # y_test = y_test.numpy()
-
     return (X_train, y_train, X_test, y_test)
 
 
@@ -81,9 +54,6 @@ def load_cifar100_data(datadir):
 
     X_train, y_train = cifar100_train_ds.data, cifar100_train_ds.target
     X_test, y_test = cifar100_test_ds.data, cifar100_test_ds.target
-
-    # y_train = y_train.numpy()
-    # y_test = y_test.numpy()
 
     return (X_train, y_train, X_test, y_test)
 
@@ -113,12 +83,9 @@ def record_net_data_stats(y_train, net_dataidx_map, logdir):
         for class_id, n_data in data.items():
             n_total += n_data
         data_list.append(n_total)
-    print('mean:', np.mean(data_list))
-    print('std:', np.std(data_list))
     logger.info('Data statistics: %s' % str(net_cls_counts))
 
     return net_cls_counts
-
 
 def partition_data(dataset, datadir, logdir, partition, n_parties, alpha=0.4):
     if dataset == 'cifar10':
@@ -146,7 +113,7 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, alpha=0.4):
             K = 100
         elif dataset == 'tinyimagenet':
             K = 200
-            # min_require_size = 100
+
 
         N = y_train.shape[0]
         net_dataidx_map = {}
@@ -156,16 +123,12 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, alpha=0.4):
             for k in range(K):
                 idx_k = np.where(y_train == k)[0]
                 np.random.shuffle(idx_k)
-                proportions = np.random.dirichlet(np.repeat(beta, n_parties))#迪利克雷分布划分数据
+                proportions = np.random.dirichlet(np.repeat(alpha, n_parties))#迪利克雷分布划分数据
                 proportions = np.array([p * (len(idx_j) < N / n_parties) for p, idx_j in zip(proportions, idx_batch)])
                 proportions = proportions / proportions.sum()
                 proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
                 idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
                 min_size = min([len(idx_j) for idx_j in idx_batch])
-                # if K == 2 and n_parties <= 10:
-                #     if np.min(proportions) < 200:
-                #         min_size = 0
-                #         break
 
         for j in range(n_parties):
             np.random.shuffle(idx_batch[j])
@@ -354,12 +317,7 @@ def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None, noise_lev
 
             normalize = transforms.Normalize(mean=[0.5070751592371323, 0.48654887331495095, 0.4409178433670343],
                                              std=[0.2673342858792401, 0.2564384629170883, 0.27615047132568404])
-            # transform_train = transforms.Compose([
-            #     transforms.RandomCrop(32),
-            #     transforms.RandomHorizontalFlip(),
-            #     transforms.ToTensor(),
-            #     normalize
-            # ])
+
             transform_train = transforms.Compose([
                 # transforms.ToPILImage(),
                 transforms.RandomCrop(32, padding=4),
@@ -481,25 +439,13 @@ def umap_kmeans(matrix, sampled_client_indices):
             v0.append(sampled_client_indices[i])
         else:
             v1.append(sampled_client_indices[i])
-    print(y_pred)
     y_pred_list=y_pred.tolist()
-    print(sampled_client_indices)
     if len(v0) < len(v1):
         benign_result = v1
     elif len(v0) > len(v1):
         benign_result = v0
-    print(benign_result)
-
 
     return benign_result,y_pred_list
-
-
-
-
-def label_flipping(net_id, net, global_net, previous_nets, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu, temperature, args,
-                      round, device="cpu"):
-    print("2333333")
-
 
 
 
