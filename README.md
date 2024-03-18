@@ -51,3 +51,10 @@ To run the script with the default parameters, use the following command:
 
 ```bash
 >python main.py --model simple-cnn-mnist --dataset mnist --partition noniid --batch-size 64
+
+
+
+## Cite 
+
+Anxiao Song, Haoshuo Li, Tao Zhang, et al. Basalt: Server-Client Joint Defense Mechanism for Byzantine-Robust Federated Learning. TechRxiv. March 18, 2024.
+DOI: 10.36227/techrxiv.171073035.50327931/v1
