@@ -7,8 +7,15 @@ Basalt is an efficient server-client defense mechanism against Byzantine attacks
 
 ## Cite 
 
-Anxiao Song, Haoshuo Li, Tao Zhang, et al. Basalt: Server-Client Joint Defense Mechanism for Byzantine-Robust Federated Learning. TechRxiv. March 18, 2024.
-DOI: 10.36227/techrxiv.171073035.50327931/v1
+@article{Song_2024,
+title={Basalt: Server-Client Joint Defense Mechanism for Byzantine-Robust Federated Learning},
+url={http://dx.doi.org/10.36227/techrxiv.171073035.50327931/v1},
+DOI={10.36227/techrxiv.171073035.50327931/v1},
+publisher={Institute of Electrical and Electronics Engineers (IEEE)},
+author={Song, Anxiao and Li, Haoshuo and Zhang, Tao and Cheng, Ke and Shen, Yulong},
+year={2024},
+month=mar }
+
 
 ## Usage
 
