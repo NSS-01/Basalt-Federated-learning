@@ -5,8 +5,8 @@
 Basalt is an efficient server-client defense mechanism against Byzantine attacks.  On the client side, we design an efficient self-defense approach with model-level penalty loss that restricts local-benign divergence and decreases local-malicious correlation to prevent misclassification. Besides, on the server side, we present an efficient defense based on the manifold approximation and the maximum clique, further enhancing the capabilities to defend against malicious Byzantine attacks. We provide rigorous robustness guarantees by proving that the difference between the global model of Basalt and the optimal global model is bounded. Our extensive experiments demonstrate that Basalt outperforms existing state-of-the-art works. Especially, It achieves nearly 100% accuracy in detecting malicious clients in non-IID MNIST datasets under various Byzantine attacks.
 
 
-## Cite 
-
+## Citation 
+```
 @article{Song_2024,
 title={Basalt: Server-Client Joint Defense Mechanism for Byzantine-Robust Federated Learning},
 url={http://dx.doi.org/10.36227/techrxiv.171073035.50327931/v1},
@@ -15,7 +15,7 @@ publisher={Institute of Electrical and Electronics Engineers (IEEE)},
 author={Song, Anxiao and Li, Haoshuo and Zhang, Tao and Cheng, Ke and Shen, Yulong},
 year={2024},
 month=mar }
-
+```
 
 ## Usage
 
